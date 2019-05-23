@@ -16,9 +16,9 @@ class GraphFeature(MyFeature):
   """Custom class used for decoding serialized GraphsTuples."""
 
   def __init__(self, key, node_feature_size, edge_feature_size,
-               global_feature_size, dtype, description):
-    super(GraphFeature, self).__init__(key,
-                                       description,
+               global_feature_size, dtype, description, **kwargs):
+    super(GraphFeature, self).__init__(key=key,
+                                       description=description,
                                        shape=[],
                                        dtype=dtype)
     features_list = [
@@ -59,7 +59,7 @@ class GraphFeature(MyFeature):
       self.features[key].key = '{}_{}'.format(self.key, key)
     self.node_feature_size = node_feature_size
     self.edge_feature_size = edge_feature_size
-    self.global_feature_size = edge_feature_size
+    self.global_feature_size = global_feature_size
 
   def get_feature_write(self, value):
     """Input `value` should be a dictionary for a `graph_net.GraphsTuple`
@@ -121,5 +121,17 @@ class GraphFeature(MyFeature):
     for key, feat in self.features.items():
       graph_dict.update(feat.npz_value(values[key]))
     return graph_dict
+
+  # Configuration saving and loading
+  def to_yaml_dict(self):
+    return {
+      'key': self.key,
+      'description': self.description,
+      'shape': self.shape,
+      'dtype': self.dtype,
+      'node_feature_size': self.node_feature_size,
+      'edge_feature_size': self.edge_feature_size,
+      'global_feature_size': self.global_feature_size,
+    }
 
 

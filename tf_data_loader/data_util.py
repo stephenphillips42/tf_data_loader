@@ -56,23 +56,322 @@ import abc
 import tqdm
 import numpy as np
 import tensorflow as tf
+import yaml
+import importlib
 
-from graph_nets import graphs
-from graph_nets import utils_tf
+def get_class(class_name):
+  return importlib.import_module(class_name, '.allfeatures')
+
+class DataWriter(abc.ABC):
+  """Graph dataset writer and generator
+
+  The `GraphDataset` stores the information about how to write and generate
+  datasets.
+  """
+  MAX_IDX = 700 # TODO: Change this from MAX_IDX to MAX_TFRECORD_SIZE
+
+  # TODO: Figure out how to handle feature dicts
+  def __init__(self, data_dir, feature_list):
+    """Initializes GraphDataset
+
+    Args:
+      data_dir: string giving the path to where the data is/will be stored
+      feature_list: list of objects that are instances of subclesses of
+        MyFeature, defining the objects in each element of the dataset
+    """
+    self.data_dir = data_dir
+    self.sizes = {}
+    self.features = {v.key: v for v in feature_list}
+
+  @abc.abstractmethod
+  def gen_sample(self, name, index):
+    """Generate a sample for this dataset.
+
+    This can either generate synthetically example or load appropriate data
+    (e.g. images) to store into a tfrecord for fast loading.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+      index: number identifer for this particular sample
+
+    Returns:
+      features: Dictionary of key strings to values of this sample
+    """
+    return {name: index}
+
+  def process_features(self, loaded_features):
+    """Prepare features for storing into a tfrecord.
+
+    This can either generate synthetically example or load appropriate data
+    (e.g. images) to store into a tfrecord for fast loading.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+
+    Returns:
+      features: Dictionary of key strings to values of this sample
+    """
+    features = {}
+    for key, feat in self.features.items():
+      features.update(feat.get_feature_write(loaded_features[key]))
+    return features
+
+  # TODO: Make hooks to make this more general
+  def convert_dataset(self, name, num_entries):
+    """Writes out tfrecords using `gen_sample` for mode `name`
+
+    This is the primary function for generating the dataset. It saves out the
+    tfrecords in `os.path.join(self.data_dir, name)`. Displays a progress
+    bar to show progress. Be careful with memory usage on disk.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+      num_entries: number of entries (>= 1) to generate
+    """
+    # Generate config file
+    with open(os.path.join(self.data_dir,name,'config.yaml'),'w') as f:
+      # TODO: Handle more general structures
+      yaml_list = {}
+      for key, value in self.features.items():
+        d = value.to_yaml_dict()
+        d['__name__'] = type(value).__name__
+        yaml_list.append(d)
+      yaml.dump(yaml_list, f)
+    # Write out dataset
+    self.sizes[name] = num_entries
+    fname = '{:03d}.tfrecords'
+    outfile = lambda idx: os.path.join(self.data_dir, name, fname.format(idx))
+    if not os.path.isdir(os.path.join(self.data_dir, name)):
+      os.makedirs(os.path.join(self.data_dir, name))
+
+    print('Writing dataset to {}/{}'.format(self.data_dir, name))
+    writer = None
+    record_idx = 0
+    file_idx = self.MAX_IDX + 1
+    for index in tqdm.tqdm(range(self.sizes[name])):
+      # Generate new file if over limit
+      if file_idx > self.MAX_IDX:
+        file_idx = 0
+        if writer:
+          writer.close()
+        writer = tf.python_io.TFRecordWriter(outfile(record_idx))
+        record_idx += 1
+      loaded_features = self.gen_sample(name, index)
+      features = self.process_features(loaded_features)
+      example = tf.train.Example(features=tf.train.Features(feature=features))
+      writer.write(example.SerializeToString())
+      file_idx += 1
+
+    if writer:
+      writer.close()
+    # And save out a file with the creation time for versioning
+    timestamp_file = '{}_timestamp.txt'.format(name)
+    timestamp_str = 'TFrecord created {}'.format(datetime.datetime.now())
+    with open(os.path.join(self.data_dir, timestamp_file), 'w') as date_file:
+      date_file.write(timestamp_str)
+
+  def create_np_dataset(self, name, num_entries):
+    """Writes out `npz` files using `gen_sample` for mode `name`
+
+    This function generates the dataset in numpy form. This is in case you need
+    to use placeholders. Displays a progress bar to show progress. Be careful
+    with memory usage on disk.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+      num_entries: number of entries (>= 1) to generate
+    """
+    self.sizes[name] = num_entries
+    fname = '{:04d}.npz'
+    outfile = lambda idx: os.path.join(self.data_dir, name,
+                                       fname.format(idx))
+    if not os.path.isdir(os.path.join(self.data_dir, name)):
+      os.makedirs(os.path.join(self.data_dir, name))
+    print('Writing dataset to {}'.format(os.path.join(self.data_dir,
+                                                      name)))
+    for index in tqdm.tqdm(range(num_entries)):
+      features = self.gen_sample(name, index)
+      npz_dict = {}
+      for key, feat in self.features.items():
+        npz_dict.update(feat.npz_value(features[key]))
+      np.savez(outfile(index), **npz_dict)
+
+    # And save out a file with the creation time for versioning
+    timestamp_file = 'np_test_timestamp.txt'
+    with open(os.path.join(self.data_dir, timestamp_file), 'w') as date_file:
+      contents = 'Numpy Dataset created {}'.format(datetime.datetime.now())
+      date_file.write(contents)
 
 
-# TODO: Make one for storing images in compressed jpg or png format
+# TODO: Maybe make gen_sample a passed in method??
+class DataNpzWriter(abc.ABC):
+  """Graph dataset writer and generator
+
+  The `GraphDataset` stores the information about how to write and generate
+  datasets.
+  """
+  MAX_IDX = 700 # TODO: Change this from MAX_IDX to MAX_TFRECORD_SIZE
+
+  def __init__(self, data_dir, feature_list):
+    """Initializes GraphDataset
+
+    Args:
+      data_dir: string giving the path to where the data is/will be stored
+      feature_list: list of objects that are instances of subclesses of
+        MyFeature, defining the objects in each element of the dataset
+    """
+    self.data_dir = data_dir
+    self.sizes = {}
+    self.features = {v.key: v for v in feature_list}
+
+  @abc.abstractmethod
+  def gen_sample(self, name, index):
+    """Generate a sample for this dataset.
+
+    This can either generate synthetically example or load appropriate data
+    (e.g. images) to store into a tfrecord for fast loading.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+      index: number identifer for this particular sample
+
+    Returns:
+      features: Dictionary of key strings to values of this sample
+    """
+    return {name: index}
+
+  def create_np_dataset(self, name, num_entries):
+    """Writes out `npz` files using `gen_sample` for mode `name`
+
+    This function generates the dataset in numpy form. This is in case you need
+    to use placeholders. Displays a progress bar to show progress. Be careful
+    with memory usage on disk.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+      num_entries: number of entries (>= 1) to generate
+    """
+    self.sizes[name] = num_entries
+    fname = '{:04d}.npz'
+    outfile = lambda idx: os.path.join(self.data_dir, name,
+                                       fname.format(idx))
+    if not os.path.isdir(os.path.join(self.data_dir, name)):
+      os.makedirs(os.path.join(self.data_dir, name))
+    print('Writing dataset to {}'.format(os.path.join(self.data_dir,
+                                                      name)))
+    for index in tqdm.tqdm(range(num_entries)):
+      features = self.gen_sample(name, index)
+      npz_dict = {}
+      for key, feat in self.features.items():
+        npz_dict.update(feat.npz_value(features[key]))
+      np.savez(outfile(index), **npz_dict)
+
+    # And save out a file with the creation time for versioning
+    timestamp_file = 'np_test_timestamp.txt'
+    with open(os.path.join(self.data_dir, timestamp_file), 'w') as date_file:
+      contents = 'Numpy Dataset created {}'.format(datetime.datetime.now())
+      date_file.write(contents)
 
 
-
-class Dataset(abc.ABC):
+# Readers
+class DataReader(object):
   """Graph dataset generator and loader
 
   The `GraphDataset` stores the information about how to load and generate
   datasets.
   """
-  MAX_IDX = 700
+  def __init__(self, data_dir):
+    """Initializes GraphDataset
 
+    Args:
+      data_dir: string giving the path to where the data is/will be stored
+      feature_list: list of objects that are instances of subclesses of
+        MyFeature, defining the objects in each element of the dataset
+    """
+    self.data_dir = data_dir
+
+  def get_parser_op(self):
+    """Returns function that parses a tfrecord Example.
+
+    This can be with a `tf.data` dataset for parsing a tfrecord.
+
+    Returns:
+      parser_op: function taking in a record and retruning a parsed dictionary
+    """
+    keys_to_features = {}
+    for _, value in self.features.items():
+      keys_to_features.update(value.get_feature_read())
+
+    def parser_op(record):
+      example = tf.parse_single_example(record, keys_to_features)
+      return {
+          k: v.tensors_to_item(example)
+          for k, v in self.features.items()
+      }
+
+    return parser_op
+
+  def load_batch(self,
+                 name,
+                 batch_size,
+                 shuffle_data=True,
+                 buffer_size=None,
+                 repeat=None):
+    """Return batch loaded from this dataset from the tfrecords of mode `name`
+
+    This is the primary function used in training.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+      batch_size: size (>= 1) of the batch to load
+      shuffle_data: (boolean, Default= True) Whether to shuffle data or not
+      buffer_size: (size, Default= True) Whether to shuffle data or not
+      repeat: Number of times to repeat the dataset, `None` if looping forever.
+        Default= `None`
+
+    Returns:
+      features: Dictionary of key strings to values of this sample
+    """
+    if buffer_size == None:
+      buffer_size = 5 * batch_size
+    # Load config
+    with open(os.path.join(self.data_dir,name,'config.yaml'),'r') as f:
+      yaml_list = yaml.load(f)
+    feature_list = []
+    for yaml_dict in yaml_list:
+      cls = get_class(yaml_dict['__name__'])
+      feature_list.append(cls.from_yaml_dict(yaml_dict))
+    # Gather data
+    data_sources = glob.glob(
+        os.path.join(self.data_dir, name, '*.tfrecords'))
+    if shuffle_data:
+      np.random.shuffle(data_sources)  # Added to help the shuffle
+    # Build dataset provider
+    dataset = tf.data.TFRecordDataset(data_sources)
+    dataset = dataset.map(self.get_parser_op())
+    dataset = dataset.repeat(repeat)
+    if shuffle_data:
+      dataset = dataset.shuffle(buffer_size=buffer_size)
+      # dataset = dataset.prefetch(buffer_size=batch_size)
+
+    iterator = dataset.make_one_shot_iterator()
+    batch = []
+    for _ in range(batch_size):
+      batch.append(iterator.get_next())
+
+    # Constructing output sample using known order of the keys
+    sample = {}
+    for key, value in self.features.items():
+      sample[key] = value.stack([batch[b][key] for b in range(batch_size)])
+    return sample
+
+
+class DataNpzReader(object):
+  """Graph dataset generator and loader
+
+  The `GraphDataset` stores the information about how to load and generate
+  datasets.
+  """
   def __init__(self, data_dir, feature_list):
     """Initializes GraphDataset
 
@@ -128,176 +427,6 @@ class Dataset(abc.ABC):
     for _, value in self.features.items():
       feed_dict.update(value.get_feed_dict(placeholders, value_dict, batch))
     return feed_dict
-
-  @abc.abstractmethod
-  def gen_sample(self, name, index):
-    """Generate a sample for this dataset.
-
-    This can either generate synthetically example or load appropriate data
-    (e.g. images) to store into a tfrecord for fast loading.
-
-    Args:
-      name: name of the mode we are in (e.g. 'train', 'test')
-      index: number identifer for this particular sample
-
-    Returns:
-      features: Dictionary of key strings to values of this sample
-    """
-    return {name: index}
-
-  def process_features(self, loaded_features):
-    """Prepare features for storing into a tfrecord.
-
-    This can either generate synthetically example or load appropriate data
-    (e.g. images) to store into a tfrecord for fast loading.
-
-    Args:
-      name: name of the mode we are in (e.g. 'train', 'test')
-
-    Returns:
-      features: Dictionary of key strings to values of this sample
-    """
-    features = {}
-    for key, feat in self.features.items():
-      features.update(feat.get_feature_write(loaded_features[key]))
-    return features
-
-  ######### Generic methods ##########
-  # Hopefully after this point you won't have to subclass any of these
-  def get_parser_op(self):
-    """Returns function that parses a tfrecord Example.
-
-    This can be with a `tf.data` dataset for parsing a tfrecord.
-
-    Returns:
-      parser_op: function taking in a record and retruning a parsed dictionary
-    """
-    keys_to_features = {}
-    for _, value in self.features.items():
-      keys_to_features.update(value.get_feature_read())
-
-    def parser_op(record):
-      example = tf.parse_single_example(record, keys_to_features)
-      return {
-          k: v.tensors_to_item(example)
-          for k, v in self.features.items()
-      }
-
-    return parser_op
-
-  def load_batch(self, name, batch_size, shuffle_data=True, repeat=None):
-    """Return batch loaded from this dataset from the tfrecords of mode `name`
-
-    This is the primary function used in training.
-
-    Args:
-      name: name of the mode we are in (e.g. 'train', 'test')
-      batch_size: size (>= 1) of the batch to load
-      shuffle_data: (boolean, Default= True) Whether to shuffle data or not
-      repeat: Number of times to repeat the dataset, `None` if looping forever.
-        Default= `None`
-
-    Returns:
-      features: Dictionary of key strings to values of this sample
-    """
-    data_sources = glob.glob(
-        os.path.join(self.data_dir, name, '*.tfrecords'))
-    if shuffle_data:
-      np.random.shuffle(data_sources)  # Added to help the shuffle
-    # Build dataset provider
-    dataset = tf.data.TFRecordDataset(data_sources)
-    dataset = dataset.map(self.get_parser_op())
-    dataset = dataset.repeat(repeat)
-    if shuffle_data:
-      dataset = dataset.shuffle(buffer_size=5 * batch_size)
-      # dataset = dataset.prefetch(buffer_size=batch_size)
-
-    iterator = dataset.make_one_shot_iterator()
-    batch = []
-    for _ in range(batch_size):
-      batch.append(iterator.get_next())
-
-    # Constructing output sample using known order of the keys
-    sample = {}
-    for key, value in self.features.items():
-      sample[key] = value.stack([batch[b][key] for b in range(batch_size)])
-    return sample
-
-  # TODO: Make hooks to make this more general
-  def convert_dataset(self, name, num_entries):
-    """Writes out tfrecords using `gen_sample` for mode `name`
-
-    This is the primary function for generating the dataset. It saves out the
-    tfrecords in `os.path.join(self.data_dir, name)`. Displays a progress
-    bar to show progress. Be careful with memory usage on disk.
-
-    Args:
-      name: name of the mode we are in (e.g. 'train', 'test')
-      num_entries: number of entries (>= 1) to generate
-    """
-    self.sizes[name] = num_entries
-    fname = '{:03d}.tfrecords'
-    outfile = lambda idx: os.path.join(self.data_dir, name,
-                                       fname.format(idx))
-    if not os.path.isdir(os.path.join(self.data_dir, name)):
-      os.makedirs(os.path.join(self.data_dir, name))
-
-    print('Writing dataset to {}/{}'.format(self.data_dir, name))
-    writer = None
-    record_idx = 0
-    file_idx = self.MAX_IDX + 1
-    for index in tqdm.tqdm(range(self.sizes[name])):
-      if file_idx > self.MAX_IDX:
-        file_idx = 0
-        if writer:
-          writer.close()
-        writer = tf.python_io.TFRecordWriter(outfile(record_idx))
-        record_idx += 1
-      loaded_features = self.gen_sample(name, index)
-      features = self.process_features(loaded_features)
-      example = tf.train.Example(features=tf.train.Features(feature=features))
-      writer.write(example.SerializeToString())
-      file_idx += 1
-
-    if writer:
-      writer.close()
-    # And save out a file with the creation time for versioning
-    timestamp_file = '{}_timestamp.txt'.format(name)
-    timestamp_str = 'TFrecord created {}'.format(datetime.datetime.now())
-    with open(os.path.join(self.data_dir, timestamp_file), 'w') as date_file:
-      date_file.write(timestamp_str)
-
-  def create_np_dataset(self, name, num_entries):
-    """Writes out `npz` files using `gen_sample` for mode `name`
-
-    This function generates the dataset in numpy form. This is in case you need
-    to use placeholders. Displays a progress bar to show progress. Be careful
-    with memory usage on disk.
-
-    Args:
-      name: name of the mode we are in (e.g. 'train', 'test')
-      num_entries: number of entries (>= 1) to generate
-    """
-    self.sizes[name] = num_entries
-    fname = '{:04d}.npz'
-    outfile = lambda idx: os.path.join(self.data_dir, name,
-                                       fname.format(idx))
-    if not os.path.isdir(os.path.join(self.data_dir, name)):
-      os.makedirs(os.path.join(self.data_dir, name))
-    print('Writing dataset to {}'.format(os.path.join(self.data_dir,
-                                                      name)))
-    for index in tqdm.tqdm(range(num_entries)):
-      features = self.gen_sample(name, index)
-      npz_dict = {}
-      for key, feat in self.features.items():
-        npz_dict.update(feat.npz_value(features[key]))
-      np.savez(outfile(index), **npz_dict)
-
-    # And save out a file with the creation time for versioning
-    timestamp_file = 'np_test_timestamp.txt'
-    with open(os.path.join(self.data_dir, timestamp_file), 'w') as date_file:
-      contents = 'Numpy Dataset created {}'.format(datetime.datetime.now())
-      date_file.write(contents)
 
   def load_npz_file(self, name, index):
     """

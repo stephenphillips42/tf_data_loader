@@ -11,7 +11,7 @@ def np_dense_to_sparse(arr):
   idx = np.where(arr != 0.0)
   return idx, arr[idx]
 
-
+# TODO: Make one for storing images in compressed jpg or png format
 class MyFeature(object):
   """Class for decoding a serialized values in tfrecords or npz files.
 
@@ -21,7 +21,7 @@ class MyFeature(object):
   or something more complicated (e.g. a GraphTuple)
   """
 
-  def __init__(self, key, description, shape=None, dtype='float32'):
+  def __init__(self, key, description, shape=None, dtype='float32', **kwargs):
     """Initialization of MyFeature, giving specification of feature.
 
     Args:
@@ -30,6 +30,7 @@ class MyFeature(object):
       shape: list/tuple of int values describing shape of this feature, if
         applicable. Default= None
       dtype: string for tf.dtype of this feature
+      kwargs: Any additional arguments
     """
     super(MyFeature, self).__init__()
     self.key = key
@@ -148,11 +149,24 @@ class MyFeature(object):
   def npz_value(self, value):
     return {self.key: value}
 
+  # Configuration saving and loading
+  @classmethod
+  def from_yaml_dict(cls, yaml_dict):
+    return cls(**yaml_dict)
+
+  def to_yaml_dict(self):
+    return {
+      'key': self.key,
+      'description': self.description,
+      'shape': self.shape,
+      'dtype': self.dtype,
+    }
+
 
 class TensorFeature(MyFeature):
   """Class used for decoding tensors of fixed size."""
 
-  def __init__(self, key, shape, dtype, description):
+  def __init__(self, key, shape, dtype, description, **kwargs):
     """Initialization of TensorFeature, giving specification of feature.
 
     Args:
@@ -160,9 +174,10 @@ class TensorFeature(MyFeature):
       shape: list/tuple of int values describing shape of this feature.
       dtype: string for tf.dtype of this feature
       description: string describing what this feature (for documentation)
+      kwargs: Any additional arguments
     """
-    super(TensorFeature, self).__init__(key,
-                                        description,
+    super(TensorFeature, self).__init__(key=key,
+                                        description=description,
                                         shape=shape,
                                         dtype=dtype)
 
@@ -188,7 +203,7 @@ class IntFeature(MyFeature):
   This class is to store a single integer value e.g. the lengths of an array.
   """
 
-  def __init__(self, key, description, dtype='int64'):
+  def __init__(self, key, description, dtype='int64', **kwargs):
     """Initialization of IntFeature, giving specification of feature.
 
     Args:
@@ -196,11 +211,12 @@ class IntFeature(MyFeature):
       description: string describing what this feature (for documentation)
       dtype: string for tf.dtype of this feature (either 'int64' or 'int32')
         Default= 'int64'
+      kwargs: Any additional arguments
     """
-    super(IntFeature, self).__init__(key,
-                                       description,
-                                       shape=[],
-                                       dtype='int64')
+    super(IntFeature, self).__init__(key=key,
+                                     description=description,
+                                     shape=[],
+                                     dtype='int64')
     assert(dtype in ['int64', 'int32'])
     self.convert_to = dtype
 
@@ -231,16 +247,17 @@ class IntFeature(MyFeature):
 class VarLenIntListFeature(MyFeature):
   """Class used for decoding variable length int64 lists."""
 
-  def __init__(self, key, dtype, description):
+  def __init__(self, key, dtype, description, **kwargs):
     """Initialization of VarLenIntListFeature, giving specification of feature.
 
     Args:
       key: string acting as name and identifier for this feature
       dtype: string for tf.dtype of this feature
       description: string describing what this feature (for documentation)
+      kwargs: Any additional arguments
     """
-    super(VarLenIntListFeature, self).__init__(key,
-                                               description,
+    super(VarLenIntListFeature, self).__init__(key=key,
+                                               description=description,
                                                shape=[None],
                                                dtype=dtype)
 
@@ -261,19 +278,21 @@ class VarLenIntListFeature(MyFeature):
     placeholder = tf.placeholder(self.dtype, shape=self.shape)
     return {self.key: placeholder}, placeholder
 
+
 class VarLenFloatFeature(MyFeature):
   """Class used for decoding variable shaped float tensors."""
 
-  def __init__(self, key, shape, description):
+  def __init__(self, key, shape, description, **kwargs):
     """Initialization of VarLenIntListFeature, giving specification of feature.
 
     Args:
       key: string acting as name and identifier for this feature
       shape: list/tuple of int values describing shape of this feature.
       description: string describing what this feature (for documentation)
+      kwargs: Any additional arguments
     """
-    super(VarLenFloatFeature, self).__init__(key,
-                                             description,
+    super(VarLenFloatFeature, self).__init__(key=key,
+                                             description=description,
                                              shape=shape,
                                              dtype='float32')
 
@@ -314,7 +333,7 @@ class VarLenFloatFeature(MyFeature):
 class SparseTensorFeature(MyFeature):
   """Class used for decoding serialized sparse float tensors."""
 
-  def __init__(self, key, shape, description):
+  def __init__(self, key, shape, description, **kwargs):
     """Initialization of SparseTensorFeature, giving specification of feature.
 
     Args:
@@ -322,8 +341,8 @@ class SparseTensorFeature(MyFeature):
       shape: list/tuple of int values describing shape of this feature.
       description: string describing what this feature (for documentation)
     """
-    super(SparseTensorFeature, self).__init__(key,
-                                              description,
+    super(SparseTensorFeature, self).__init__(key=key,
+                                              description=description,
                                               shape=shape,
                                               dtype='float32')
 
@@ -385,5 +404,4 @@ class SparseTensorFeature(MyFeature):
     idx_, val = value[0], value[1]
     idx = np.stack(idx_, -1)
     return {self.key + '_idx': idx, self.key + '_val': val}
-
 
