@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Graph dataset generator and loader
+"""Graph dataset loader
 
-The `GraphDataset` stores the information about how to load and generate
+The `GraphDataset` stores the information about how to load 
 datasets. To create a dataset, you need to specify the features that the
 dataset will load. Here 'features' means an instance of a subclass of the
 `MyFeature` class. As an example:
@@ -53,11 +53,12 @@ import glob
 import datetime
 import abc
 
-import tqdm
 import numpy as np
 import tensorflow as tf
 import yaml
 import importlib
+
+import sys
 
 class DataReader(object):
   """Graph dataset generator and loader
@@ -74,6 +75,17 @@ class DataReader(object):
         MyFeature, defining the objects in each element of the dataset
     """
     self.data_dir = data_dir
+    # Load config
+    with open(os.path.join(self.data_dir,'config.yaml'),'r') as f:
+      yaml_list = yaml.load(f)
+    feature_list = []
+
+    for yaml_dict in yaml_list:
+      # TODO: Determine if this is the proper way to do this
+      af = importlib.import_module('.allfeatures',package='tf_data_loader')
+      cls = getattr(af, yaml_dict['__name__'])
+      feature_list.append(cls.from_yaml_dict(yaml_dict))
+    self.features = { feat.key: feat for feat in feature_list }
 
   def get_parser_op(self):
     """Returns function that parses a tfrecord Example.
@@ -119,14 +131,6 @@ class DataReader(object):
     """
     if buffer_size == None:
       buffer_size = 5 * batch_size
-    # Load config
-    with open(os.path.join(self.data_dir,name,'config.yaml'),'r') as f:
-      yaml_list = yaml.load(f)
-    feature_list = []
-    get_class = lambda nm: importlib.import_module(nm, '.allfeatures')
-    for yaml_dict in yaml_list:
-      cls = get_class(yaml_dict['__name__'])
-      feature_list.append(cls.from_yaml_dict(yaml_dict))
     # Gather data
     data_sources = glob.glob(
         os.path.join(self.data_dir, name, '*.tfrecords'))
@@ -152,23 +156,11 @@ class DataReader(object):
     return sample
 
 
-class DataNpzReader(object):
-  """Graph dataset generator and loader
+class DataNpzReader(DataReader):
+  """Graph dataset loader
 
-  The `GraphDataset` stores the information about how to load and generate
-  datasets.
+  The `GraphDataset` stores the information about how to load datasets.
   """
-  def __init__(self, data_dir, feature_list):
-    """Initializes GraphDataset
-
-    Args:
-      data_dir: string giving the path to where the data is/will be stored
-      feature_list: list of objects that are instances of subclesses of
-        MyFeature, defining the objects in each element of the dataset
-    """
-    self.data_dir = data_dir
-    self.sizes = {}
-    self.features = {v.key: v for v in feature_list}
 
   def get_placeholders(self, batch=True):
     """Gets appropriate dictionary of placeholders all features of this dataset.
