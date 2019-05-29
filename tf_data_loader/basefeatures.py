@@ -162,6 +162,19 @@ class MyFeature(object):
       'dtype': self.dtype,
     }
 
+  def __eq__(self, other):
+    if not isinstance(other, self.__class__):
+      return False
+    if self.key != other.key:
+      return False
+    if self.description != other.description:
+      return False
+    if self.shape != other.shape:
+      return False
+    if self.dtype != other.dtype:
+      return False
+    return True
+
 
 class TensorFeature(MyFeature):
   """Class used for decoding tensors of fixed size."""
@@ -244,15 +257,16 @@ class IntFeature(MyFeature):
     return {self.key: placeholder}, sample
 
 
+# TODO: Document how this is not batchable
 class VarLenIntListFeature(MyFeature):
   """Class used for decoding variable length int64 lists."""
 
-  def __init__(self, key, dtype, description, **kwargs):
+  def __init__(self, key, description, dtype='int64', **kwargs):
     """Initialization of VarLenIntListFeature, giving specification of feature.
 
     Args:
       key: string acting as name and identifier for this feature
-      dtype: string for tf.dtype of this feature
+      dtype: string for tf.dtype of this feature. Default: int64
       description: string describing what this feature (for documentation)
       kwargs: Any additional arguments
     """
@@ -287,7 +301,8 @@ class VarLenFloatFeature(MyFeature):
 
     Args:
       key: string acting as name and identifier for this feature
-      shape: list/tuple of int values describing shape of this feature.
+      shape: list/tuple of int values describing shape of this feature, or
+        `None` along the dimension of variable length.
       description: string describing what this feature (for documentation)
       kwargs: Any additional arguments
     """
@@ -331,7 +346,7 @@ class VarLenFloatFeature(MyFeature):
 
 
 class SparseTensorFeature(MyFeature):
-  """Class used for decoding serialized sparse float tensors."""
+  """Class used for decoding serialized sparse float tensors (only float32)."""
 
   def __init__(self, key, shape, description, **kwargs):
     """Initialization of SparseTensorFeature, giving specification of feature.
@@ -352,7 +367,8 @@ class SparseTensorFeature(MyFeature):
 
     Value should be a tuple `(idx, vals)` with `idx` being a tuple of lists of
     `int` values of the same length and `vals` is a list of `self.dtype` values
-    the same length as `idx[0]`.
+    the same length as `idx[0]`. This is given automatically if you use 
+    `np_dense_to_sparse`.
     """
     idx, vals = value[0], value[1]
     sptensor_feature = {

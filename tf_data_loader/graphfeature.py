@@ -6,7 +6,7 @@ import os
 from graph_nets import graphs
 from graph_nets import utils_tf
 
-from .myfeatures import *
+from .basefeatures import *
 
 GRAPH_KEYS = [
     'n_node', 'nodes', 'n_edge', 'edges', 'receivers', 'senders', 'globals'
@@ -133,5 +133,17 @@ class GraphFeature(MyFeature):
       'edge_feature_size': self.edge_feature_size,
       'global_feature_size': self.global_feature_size,
     }
+
+  def __eq__(self, other):
+    if not super(GraphFeature, self).__eq__(other):
+      return False
+    if self.node_feature_size != other.node_feature_size:
+      return False
+    if self.edge_feature_size != other.edge_feature_size:
+      return False
+    if self.global_feature_size != other.global_feature_size:
+      return False
+    return True
+
 
 
