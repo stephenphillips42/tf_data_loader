@@ -374,14 +374,12 @@ class DataReaderBasicTest(ReadTestCase):
     batch_size = 1
     self.data_writer.create_dataset(name, num_total)
     mysample = self.generator.gen_sample(name, 0)
-    mysample2 = self.generator.gen_sample(name, 0)
     sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
     with tf.Session(config=copy.deepcopy(self.config)) as sess:
       sample_ = sess.run(sample)
       self.assertEqual(sample_.keys(), mysample.keys())
       for k in sorted(list(sample_.keys())):
-        # equal_val = self.isEqualSampleVals(sample_[k], mysample[k])
-        equal_val = self.isEqualSampleVals(mysample[k], mysample2[k])
+        equal_val = self.isEqualSampleVals(sample_[k], mysample[k])
         self.assertTrue(equal_val, '{} not equal'.format(k))
 
   def test_multi_read(self):
