@@ -108,6 +108,32 @@ class DataReader(object):
 
     return parser_op
 
+  def get_iterator(self,
+                   name,
+                   batch_size,
+                   shuffle_data=True,
+                   buffer_size=None,
+                   repeat=None):
+    # TODO: Add documentation
+    if buffer_size == None:
+      buffer_size = 5 * batch_size
+    # Gather data
+    data_sources = glob.glob(
+        os.path.join(self.data_dir, name, '*.tfrecords'))
+    if shuffle_data:
+      np.random.shuffle(data_sources)  # Added to help the shuffle
+    # Build dataset provider
+    dataset = tf.data.TFRecordDataset(data_sources)
+    dataset = dataset.map(self.get_parser_op())
+    dataset = dataset.repeat(repeat)
+    if shuffle_data:
+      dataset = dataset.shuffle(buffer_size=buffer_size)
+      # TODO: Add this?
+      # dataset = dataset.prefetch(buffer_size=batch_size)
+
+    iterator = dataset.make_one_shot_iterator()
+    return iterator
+
   def load_batch(self,
                  name,
                  batch_size,
@@ -129,25 +155,17 @@ class DataReader(object):
     Returns:
       features: Dictionary of key strings to values of this sample
     """
-    if buffer_size == None:
-      buffer_size = 5 * batch_size
-    # Gather data
-    data_sources = glob.glob(
-        os.path.join(self.data_dir, name, '*.tfrecords'))
-    if shuffle_data:
-      np.random.shuffle(data_sources)  # Added to help the shuffle
-    # Build dataset provider
-    dataset = tf.data.TFRecordDataset(data_sources)
-    dataset = dataset.map(self.get_parser_op())
-    dataset = dataset.repeat(repeat)
-    if shuffle_data:
-      dataset = dataset.shuffle(buffer_size=buffer_size)
-      # dataset = dataset.prefetch(buffer_size=batch_size)
-
-    iterator = dataset.make_one_shot_iterator()
+    iterator = self.get_iterator(name,
+                                 batch_size,
+                                 shuffle_data,
+                                 buffer_size,
+                                 repeat)
     batch = []
-    for _ in range(batch_size):
-      batch.append(iterator.get_next())
+    batch.append(iterator.get_next())
+    if batch_size > 1:
+      for _ in range(batch_size-1):
+        with tf.control_dependencies(batch[-1]):
+          batch.append(iterator.get_next())
 
     # Constructing output sample using known order of the keys
     sample = {}
