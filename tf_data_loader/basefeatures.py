@@ -149,6 +149,20 @@ class MyFeature(object):
   def npz_value(self, value):
     return {self.key: value}
 
+  def npz_stack(self, value):
+    """Stacks a list of parsed npz features for batching.
+
+    This is called after loading features from the .npz file, to stack them
+    into a batch.
+
+    Args:
+      arr: list of parsed features to stack together
+
+    Returns:
+      item: item of values stacked together appropriately
+    """
+    return np.stack(arr, axis=0)
+
   # Configuration saving and loading
   @classmethod
   def from_yaml_dict(cls, yaml_dict):
@@ -288,11 +302,6 @@ class VarLenIntListFeature(MyFeature):
     tensor = tf.sparse_tensor_to_dense(tensor)
     return tf.cast(tensor, self.dtype)
 
-  def get_placeholder_and_feature(self, batch=True):
-    placeholder = tf.placeholder(self.dtype, shape=self.shape)
-    return {self.key: placeholder}, placeholder
-
-
 class VarLenFloatFeature(MyFeature):
   """Class used for decoding variable shaped float tensors."""
 
@@ -302,7 +311,7 @@ class VarLenFloatFeature(MyFeature):
     Args:
       key: string acting as name and identifier for this feature
       shape: list/tuple of int values describing shape of this feature, or
-        `None` along the dimension of variable length.
+        `None` along the dimension(s) of variable length.
       description: string describing what this feature (for documentation)
       kwargs: Any additional arguments
     """
@@ -310,6 +319,8 @@ class VarLenFloatFeature(MyFeature):
                                              description=description,
                                              shape=shape,
                                              dtype='float32')
+    assert np.sum(np.array([ x is None for x in shape ])) <= 1, \
+              'Shape can at most 1 variable length dimension'
 
   def get_feature_write(self, value):
     """Input `value` has to be compatible with this instance's shape."""
@@ -319,8 +330,7 @@ class VarLenFloatFeature(MyFeature):
         for i, sz in enumerate(value.shape):
           if self.shape[i] is not None:
             assert sz == self.shape[i], err_msg
-      elif len(value.shape) == 1 and \
-            len(self.shape) == 2 and \
+      elif len(value.shape) == 1 and len(self.shape) == 2 and \
             self.shape[0] is None:
         assert value.shape[0] == self.shape[1], err_msg
       else:
@@ -340,9 +350,27 @@ class VarLenFloatFeature(MyFeature):
     tensor = tf.reshape(tensor, shape)
     return tensor
 
-  def get_placeholder_and_feature(self, batch=True):
-    placeholder = tf.placeholder(self.dtype, shape=self.shape)
-    return {self.key: placeholder}, placeholder
+  # def stack(self, arr):
+  #   # Much simpler code in the size 1 batch case
+  #   if len(arr) == 1:
+  #     return tf.stack(arr) 
+  #   pad_dims = [ i for i, x in enumerate(self.shape) if x is None or x < 0 ]
+  #   max_lens = [ max([ x.shape[p] for x in arr ]) for p in pad_dims ]
+  #   stack_arr = []
+  #   for x in arr:
+  #     xpad = [ [0,0] for i in range(len(self.shape)) ]
+  #     for i, p in enumerate(pad_dims):
+  #       xpad[p] = [0, max_lens[i] - x.shape[p]]
+  #     stack_arr.append(tf.pad(x, xpad))
+  #   return np.stack(stack_arr)
+
+  # def npz_stack(self, arr):
+  #   shape = [ tf.shape(x)[0] for x in arr]
+  #   max_len = tf.reduce_max(shape)
+  #   return np.stack([
+  #     np.pad(x, (0,max_len-s), 'constant', constant_values=(0,0))
+  #     for x, s in zip(arr, shape)
+  #   ])
 
 
 class SparseTensorFeature(MyFeature):
@@ -403,6 +431,11 @@ class SparseTensorFeature(MyFeature):
   def stack(self, arr):
     concat_arr = [tf.sparse_reshape(x, [1] + self.shape) for x in arr]
     return tf.sparse_concat(0, concat_arr)
+
+  def npz_stack(self, arr):
+    inds_concat = [ np.reshape(x, [1] + self.shape) for x, _ in arr ]
+    vals_concat = [ x for _, x in arr ]
+    return np.concatenate(inds_concat), np.concatenate(vals_concat)
 
   # Placeholder related
   def get_placeholder_and_feature(self, batch):
