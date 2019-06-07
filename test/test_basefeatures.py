@@ -10,16 +10,6 @@ import tempfile
 import shutil
 import zlib
 
-
-# Debug printing
-import pprint
-pp_xfawedfssa = pprint.PrettyPrinter(indent=2)
-def myprint(x):
-  if type(x) == str:
-    print(x)
-  else:
-    pp_xfawedfssa.pprint(x)
-
 # Graph related stuff
 graph_nets_available = True
 try:
@@ -419,24 +409,23 @@ class SparseTensorFeatureNPZTest(NPZTest):
     np.random.seed(abs(myhash(feat.key)) % (2**31-1))
     vals_dense = [ np.random.binomial(1,0.1,size=feat.shape)
                    for i in range(self.NTESTS) ]
-    vals_sparse = []
-    for A in vals_dense:
-      idx, vals = basefeat.np_dense_to_sparse(A)
-      vals_sparse.append(tf.SparseTensorValue(np.stack(idx,-1), vals, feat.shape))
-    X = feat.stack(phs)
-    total_len = sum([ len(v.values) for v in vals_sparse])
-    run_len = len(X_.values)
+    vals_sparse = [ basefeat.np_dense_to_sparse(A) for A in vals_dense ]
+    X = feat.np_stack(vals_sparse)
+    total_len = sum([ len(v[1]) for v in vals_sparse])
+    run_len = len(X[1])
     msg = 'Differing number of values: {} vs {}'.format(run_len, total_len)
     self.assertEqual(run_len, total_len, msg)
     for i, v in enumerate(vals_sparse):
-      for vval, vinds in zip(v.values, v.indices):
+      vinds_stack = np.stack(v[0], axis=-1)
+      for vval, vinds in zip(v[1], vinds_stack):
         value_found = False
-        for xval, xinds in zip(X_.values, X_.indices):
+        for xval, xinds in zip(X[1], X[0]):
           if xinds[0] == i and np.allclose(xinds[1:], vinds):
             msg = 'Values {} and {} not equal with inds {}'.format(vval, xval, xinds)
             self.assertEqual(xval, vval)
             value_found = True
-        self.assertTrue(value_found, msg='Values {}, indices {} not found'.format(vval, vinds))
+        msg = 'Values {}, indices {} not found'.format(vval, vinds)
+        self.assertTrue(value_found, msg=msg)
 
   def test_stack_shape1(self):
     name = 'test_stack_shape1' + self.__class__.__name__

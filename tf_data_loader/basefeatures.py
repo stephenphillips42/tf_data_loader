@@ -459,8 +459,9 @@ class SparseTensorFeature(BaseFeature):
     return tf.sparse_concat(0, concat_arr)
 
   def np_stack(self, arr):
-    inds_concat = [ np.reshape((i,*x[0]), [1] + self.shape)
-                    for i, x in enumerate(arr) ]
+    # inds_concat = [ np.reshape((i,*x[0]), [1] + self.shape)
+    ind_prep = lambda i, x: np.stack([ i*np.ones(len(x[0])), *x ], axis=-1)
+    inds_concat = [ ind_prep(i, x[0]) for i, x in enumerate(arr) ]
     vals_concat = [ x for _, x in arr ]
     return np.concatenate(inds_concat), np.concatenate(vals_concat)
 
