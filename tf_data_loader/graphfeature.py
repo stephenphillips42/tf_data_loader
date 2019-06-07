@@ -5,6 +5,7 @@ from __future__ import print_function
 import os
 from graph_nets import graphs
 from graph_nets import utils_tf
+from graph_nets import utils_np
 
 from .basefeatures import *
 
@@ -12,7 +13,7 @@ GRAPH_KEYS = [
     'n_node', 'nodes', 'n_edge', 'edges', 'receivers', 'senders', 'globals'
 ]
 
-class GraphFeature(MyFeature):
+class GraphFeature(BaseFeature):
   """Custom class used for decoding serialized GraphsTuples."""
 
   def __init__(self, key, node_feature_size, edge_feature_size,
@@ -87,6 +88,9 @@ class GraphFeature(MyFeature):
 
   def stack(self, arr):
     return utils_tf.data_dicts_to_graphs_tuple(arr)
+
+  def np_stack(self, arr):
+    return utils_np.data_dicts_to_graphs_tuple(arr)
 
   # Placeholder related
   def get_placeholder_and_feature(self, batch):

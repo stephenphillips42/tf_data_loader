@@ -12,7 +12,7 @@ def np_dense_to_sparse(arr):
   return idx, arr[idx]
 
 # TODO: Make one for storing images in compressed jpg or png format
-class MyFeature(object):
+class BaseFeature(object):
   """Class for decoding a serialized values in tfrecords or npz files.
 
   Base class that all other features should subclass. Handles writing out to
@@ -22,7 +22,7 @@ class MyFeature(object):
   """
 
   def __init__(self, key, description, shape=None, dtype='float32', **kwargs):
-    """Initialization of MyFeature, giving specification of feature.
+    """Initialization of BaseFeature, giving specification of feature.
 
     Args:
       key: string acting as name and identifier for this feature
@@ -32,7 +32,7 @@ class MyFeature(object):
       dtype: string for tf.dtype of this feature
       kwargs: Any additional arguments
     """
-    super(MyFeature, self).__init__()
+    super(BaseFeature, self).__init__()
     self.key = key
     self.description = description
     self.shape = shape if shape is not None else []
@@ -149,8 +149,8 @@ class MyFeature(object):
   def npz_value(self, value):
     return {self.key: value}
 
-  def npz_stack(self, value):
-    """Stacks a list of parsed npz features for batching.
+  def np_stack(self, arr):
+    """Stacks a list of parsed features from the npz files for batching.
 
     This is called after loading features from the .npz file, to stack them
     into a batch.
@@ -190,7 +190,7 @@ class MyFeature(object):
     return True
 
 
-class TensorFeature(MyFeature):
+class TensorFeature(BaseFeature):
   """Class used for decoding tensors of fixed size."""
 
   def __init__(self, key, shape, dtype, description, **kwargs):
@@ -224,7 +224,7 @@ class TensorFeature(MyFeature):
     return tensor
 
 
-class IntFeature(MyFeature):
+class IntFeature(BaseFeature):
   """Class used for decoding a single serialized int64 value.
 
   This class is to store a single integer value e.g. the lengths of an array.
@@ -270,9 +270,56 @@ class IntFeature(MyFeature):
       sample = placeholder
     return {self.key: placeholder}, sample
 
+class VarLenTensorFeature(BaseFeature):
+  """Class used for decoding variable size features."""
 
-# TODO: Document how this is not batchable
-class VarLenIntListFeature(MyFeature):
+  def __init__(self, key, description, shape, dtype, **kwargs):
+    """Initialization of VarLenTensorFeature, giving specification of feature.
+
+    Args:
+      key: string acting as name and identifier for this feature
+      description: string describing what this feature (for documentation)
+      shape: list/tuple of int values describing shape of this feature, if
+        applicable. Default= None
+      dtype: string for tf.dtype of this feature
+      kwargs: Any additional arguments
+    """
+    super(VarLenTensorFeature, self).__init__(key=key,
+                                        description=description,
+                                        shape=shape,
+                                        dtype=dtype)
+    self.pad_dims = [i for i, x in enumerate(self.shape) if x is None or x < 0]
+
+  # Stacking functions
+  def _pad(self, t, max_in_dims, constant_values=0):
+    s = tf.shape(t)
+    paddings = [[0, m-s[i]] for (i,m) in enumerate(max_in_dims)]
+    padt = tf.pad(t, paddings, 'CONSTANT', constant_values=constant_values)
+    return padt
+
+  def stack(self, arr):
+    # Much simpler code in the size 1 batch case
+    if len(arr) == 1:
+      return tf.stack(arr) 
+    max_in_dims = [ d for d in self.shape ]
+    for d in self.pad_dims:
+      max_in_dims[d] = tf.reduce_max([ tf.shape(x)[d] for x in arr ])
+    return tf.stack([ self._pad(x, max_in_dims) for x in arr ])
+
+  def _pad_np(self, t, max_in_dims, constant_values=0):
+    s = t.shape
+    paddings = [[0, m-s[i]] for (i,m) in enumerate(max_in_dims)]
+    padt = np.pad(t, paddings, 'constant', constant_values=constant_values)
+    return padt
+
+  def np_stack(self, arr):
+    max_in_dims = [ d for d in self.shape ]
+    for d in self.pad_dims:
+      max_in_dims[d] = np.max([ x.shape[d] for x in arr ])
+    return np.stack([ self._pad_np(x, max_in_dims) for x in arr ])
+
+
+class VarLenIntListFeature(VarLenTensorFeature):
   """Class used for decoding variable length int64 lists."""
 
   def __init__(self, key, description, dtype='int64', **kwargs):
@@ -288,6 +335,7 @@ class VarLenIntListFeature(MyFeature):
                                                description=description,
                                                shape=[None],
                                                dtype=dtype)
+    self.pad_dims = [i for i, x in enumerate(self.shape) if x is None or x < 0]
 
   def get_feature_write(self, value):
     """Input `value` should be a list of integers."""
@@ -302,7 +350,8 @@ class VarLenIntListFeature(MyFeature):
     tensor = tf.sparse_tensor_to_dense(tensor)
     return tf.cast(tensor, self.dtype)
 
-class VarLenFloatFeature(MyFeature):
+
+class VarLenFloatFeature(VarLenTensorFeature):
   """Class used for decoding variable shaped float tensors."""
 
   def __init__(self, key, shape, description, **kwargs):
@@ -319,8 +368,7 @@ class VarLenFloatFeature(MyFeature):
                                              description=description,
                                              shape=shape,
                                              dtype='float32')
-    assert np.sum(np.array([ x is None for x in shape ])) <= 1, \
-              'Shape can at most 1 variable length dimension'
+    self.pad_dims = [i for i, x in enumerate(self.shape) if x is None or x < 0]
 
   def get_feature_write(self, value):
     """Input `value` has to be compatible with this instance's shape."""
@@ -350,30 +398,8 @@ class VarLenFloatFeature(MyFeature):
     tensor = tf.reshape(tensor, shape)
     return tensor
 
-  # def stack(self, arr):
-  #   # Much simpler code in the size 1 batch case
-  #   if len(arr) == 1:
-  #     return tf.stack(arr) 
-  #   pad_dims = [ i for i, x in enumerate(self.shape) if x is None or x < 0 ]
-  #   max_lens = [ max([ x.shape[p] for x in arr ]) for p in pad_dims ]
-  #   stack_arr = []
-  #   for x in arr:
-  #     xpad = [ [0,0] for i in range(len(self.shape)) ]
-  #     for i, p in enumerate(pad_dims):
-  #       xpad[p] = [0, max_lens[i] - x.shape[p]]
-  #     stack_arr.append(tf.pad(x, xpad))
-  #   return np.stack(stack_arr)
 
-  # def npz_stack(self, arr):
-  #   shape = [ tf.shape(x)[0] for x in arr]
-  #   max_len = tf.reduce_max(shape)
-  #   return np.stack([
-  #     np.pad(x, (0,max_len-s), 'constant', constant_values=(0,0))
-  #     for x, s in zip(arr, shape)
-  #   ])
-
-
-class SparseTensorFeature(MyFeature):
+class SparseTensorFeature(BaseFeature):
   """Class used for decoding serialized sparse float tensors (only float32)."""
 
   def __init__(self, key, shape, description, **kwargs):
@@ -432,8 +458,9 @@ class SparseTensorFeature(MyFeature):
     concat_arr = [tf.sparse_reshape(x, [1] + self.shape) for x in arr]
     return tf.sparse_concat(0, concat_arr)
 
-  def npz_stack(self, arr):
-    inds_concat = [ np.reshape(x, [1] + self.shape) for x, _ in arr ]
+  def np_stack(self, arr):
+    inds_concat = [ np.reshape((i,*x[0]), [1] + self.shape)
+                    for i, x in enumerate(arr) ]
     vals_concat = [ x for _, x in arr ]
     return np.concatenate(inds_concat), np.concatenate(vals_concat)
 
