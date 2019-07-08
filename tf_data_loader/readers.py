@@ -164,7 +164,16 @@ class DataReader(object):
     batch.append(iterator.get_next())
     if batch_size > 1:
       for _ in range(batch_size-1):
-        with tf.control_dependencies(batch[-1]):
+        deps = []
+        for _, x in batch[-1].items():
+          if isinstance(x, tf.SparseTensor):
+            continue
+          if isinstance(x, dict):
+            x_ = [ v for k, v in x.items() ]
+            deps.extend(x_)
+          else:
+            deps.append(x)
+        with tf.control_dependencies(deps):
           batch.append(iterator.get_next())
 
     # Constructing output sample using known order of the keys

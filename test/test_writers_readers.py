@@ -12,6 +12,17 @@ import zlib
 import unittest
 import copy
 
+########### Debug printing ###########
+import pprint
+pp_xfawedfssa = pprint.PrettyPrinter(indent=2)
+def myprint(x):
+  if type(x) == str:
+    print(x)
+  else:
+    pp_xfawedfssa.pprint(x)
+#######################################
+
+
 # Graph related stuff
 graph_nets_available = True
 try:
@@ -29,6 +40,7 @@ import tf_data_loader as tfdataloader
 def myhash(x):
   return zlib.adler32(str(x).encode('utf-8'))
 
+############### Data Generators ###############
 class BasicDataGenerator(tfdataloader.DataGenerator):
   """Test dataset generator """
   def __init__(self):
@@ -52,7 +64,7 @@ class BasicDataGenerator(tfdataloader.DataGenerator):
     seed = abs(index * myhash(name)) % (2**32 - 1)
     np.random.seed(seed)
     # Generate data
-    class_val =  np.random.randint(0,3)
+    class_val = index # np.random.randint(0,3)
     tensor = np.random.randn(3,3,3) + class_val
     self.out_val = {
       'tensor': tensor.astype('float32'),
@@ -190,14 +202,152 @@ if graph_nets_available:
   graph_generator = GraphDataGenerator()
 
 
-# Test cases
-class DataWriterBasicTest(unittest.TestCase):
-  def setUp(self):
+############### Base Classes ###############
+class ReadTestCase(unittest.TestCase):
+  def mySetUp(self, generator):
+    # Create a temporary directory for data saving before each test
+    self.test_dir = tempfile.mkdtemp()
+    self.config = tf.ConfigProto()
+    self.config.gpu_options.allow_growth = True
+    self.generator = generator
+    self.data_writer = tfdataloader.DataWriter(self.test_dir,
+                                               self.generator,
+                                               verbose=False)
+    self.data_reader = tfdataloader.DataReader(self.test_dir)
+    # Switchers
+    self.equal_switcher = {
+      tfdataloader.SparseTensorFeature :
+          lambda f, v0, v1: self.sparseTensorValEqual(f, v0, v1),
+      tfdataloader.VarLenIntListFeature :
+          lambda f, v0, v1: self.varLenIntListEqual(f, v0, v1),
+      tfdataloader.VarLenFloatFeature:
+          lambda f, v0, v1: self.varLenFloatValEqual(f, v0, v1),
+    }
+    self.select_switcher = {
+      tfdataloader.SparseTensorFeature :
+          lambda v, i: self.sparseTensorSelect(v, i),
+    }
+
+  def tearDown(self):
+    # Remove the directory after each test
+    shutil.rmtree(self.test_dir)
+
+  # Not all features require the same equality
+  def sparseTensorValToTuple(self, sptensor):
+    indices = [
+      x.reshape(-1)
+      for x in np.split(sptensor.indices, sptensor.indices.shape[-1], axis=-1)
+    ]
+    values = sptensor.values
+    ttensor = (indices, values)
+    return ttensor
+
+  def isEqualSampleVals(self, feat, val0, val1):
+    eqOp_default = lambda f, v0, v1: self.standardEqual(v0, v1)
+    eqOp = self.equal_switcher.get(type(feat), eqOp_default)
+    return eqOp(feat, val0, val1)
+
+  def select(self, feat, val, idx):
+    select_default = lambda v, i: v[i]
+    eqOp = self.select_switcher.get(type(feat), select_default)
+    return eqOp(val, idx)
+
+  # TODO: Should this go into the classes themselves?
+  def standardEqual(self, val0, val1):
+    return np.array_equiv(np.squeeze(val0), np.squeeze(val1))
+
+  def varLenFloatValEqual(self, feat, val0, val1):
+    if len(val0.shape) > 1 and val0.shape[0] == 1 \
+        and len(val0.shape) == len(val1.shape) + 1:
+      val0 = val0[0]
+    elif len(val1.shape) > 1 and val1.shape[0] == 1 \
+        and len(val1.shape) == len(val0.shape) + 1:
+      val1 = val1[0]
+    if len(val0.shape) != len(val1.shape):
+      return False
+    x = tuple(slice(None,min(s0,s1)) for s0, s1 in zip(val0.shape, val1.shape))
+    val0_ = val0[x]
+    val1_ = val1[x]
+    if not np.allclose(val0_, val1_):
+      return False
+    x = tuple(slice(min(s0,s1),None) for s0, s1 in zip(val0.shape, val1.shape))
+    val0_zeros = val0[x]
+    val1_zeros = val1[x]
+    if not np.allclose(val0_zeros,0) or not np.allclose(val1_zeros, 0):
+      return False
+    return True
+
+  def varLenIntListEqual(self, feat, val0, val1):
+    if not isinstance(val0, np.ndarray) or not isinstance(val1, np.ndarray):
+      return False
+    while len(val0.shape) > 1 and val0.shape[0] == 1:
+      val0 = val0[0]
+    while len(val1.shape) > 1 and val1.shape[0] == 1:
+      val1 = val1[0]
+    if len(val0.shape) != len(val1.shape) or len(val1.shape) != 1:
+      return False
+    l = min(len(val0), len(val1))
+    val0_ = val0[:l]
+    val1_ = val1[:l]
+    return np.allclose(val0_, val1_)
+
+  def sparseTensorValEqual(self, feat, val0, val1):
+    if isinstance(val0, tf.SparseTensorValue):
+      val0 = self.sparseTensorValToTuple(val0)
+    if isinstance(val1, tf.SparseTensorValue):
+      val1 = self.sparseTensorValToTuple(val1)
+    # Now treat equally
+    indices0, indices1 = val0[0], val1[0]
+    values0, values1 = val0[1], val1[1]
+    if len(values0) == 0 and len(values1) == 0:
+      return True
+    if len(indices0) > 1 and np.allclose(indices0[0],0) \
+        and len(indices0) == len(indices1) + 1:
+      indices0 = indices0[1:]
+    elif len(indices1) > 1 and np.allclose(indices1[0],0) \
+        and len(indices1) == len(indices0) + 1:
+      indices1 = indices1[1:]
+    if len(indices0) != len(indices1):
+      return False
+    if len(indices0[0]) != len(indices1[0]):
+      return False
+    if values0.shape != values1.shape:
+      return False
+    for ind0, ind1 in zip(indices0, indices1):
+      if not np.array_equiv(ind0,ind1):
+        return False
+    equal_val = np.array_equiv(values0, values1)
+    return equal_val
+
+  def sparseTensorSelect(self, val, idx):
+    if isinstance(val, tf.SparseTensorValue):
+      inds = val.indices
+      vals = val.values
+    elif isinstance(val, tuple):
+      inds, vals = val
+    else:
+      self.assertTrue(False, 'Invalid Sparse type for selection')
+    inds_new = [ [] for i in range(len(inds[0])-1) ]
+    vals_new = []
+    for i in range(len(vals)):
+      if inds[i][0] == idx:
+        vals_new.append(vals[i])
+        for j in range(len(inds[0])-1):
+          inds_new[j].append(inds[i][j+1])
+    return tuple([ np.array(x) for x in inds_new]), np.array(vals_new)
+
+############### TFRecord Tests ###############
+# Writer Tests
+class DataTFRecordWriterBasicTest(unittest.TestCase):
+  def mySetUp(self, generator):
     # Create a temporary directory for data saving before each test
     self.test_dir = tempfile.mkdtemp()
     self.data_writer = tfdataloader.DataWriter(self.test_dir,
-                                               basic_generator,
+                                               generator,
                                                verbose=False)
+
+  def setUp(self):
+    self.mySetUp(basic_generator)
 
   def tearDown(self):
     # Remove the directory after each test
@@ -231,25 +381,129 @@ class DataWriterBasicTest(unittest.TestCase):
     self.assertTrue(os.path.exists(path1))
 
 
-class DataWriterAllFeaturesTest(DataWriterBasicTest):
+class DataTFRecordWriterAllFeaturesTest(DataTFRecordWriterBasicTest):
   def setUp(self):
-    # Create a temporary directory for data saving before each test
-    self.test_dir = tempfile.mkdtemp()
-    self.data_writer = tfdataloader.DataWriter(self.test_dir,
-                                               all_features_generator,
-                                               verbose=False)
+    self.mySetUp(all_features_generator)
 
 
 if graph_nets_available:
-  class DataWriterGraphTest(DataWriterBasicTest):
+  class DataTFRecordWriterGraphTest(DataTFRecordWriterBasicTest):
     def setUp(self):
-      # Create a temporary directory for data saving before each test
-      self.test_dir = tempfile.mkdtemp()
-      self.data_writer = tfdataloader.DataWriter(self.test_dir,
-                                                 graph_generator,
-                                                 verbose=False)
+      self.mySetUp(graph_generator)
 
 
+# Reader tests
+class DataTFRecordReaderBasicTest(ReadTestCase):
+  def setUp(self):
+    self.mySetUp(basic_generator)
+
+  def test_features(self):
+    for key, write_feat in self.data_writer.features.items():
+      read_feat = self.data_reader.features[key]
+      self.assertEqual(read_feat, write_feat)
+
+  def test_basic_read(self):
+    name = 'test_basic_read'
+    num_total = 1
+    batch_size = 1
+    self.data_writer.create_dataset(name, num_total)
+    mysample = self.generator.gen_sample(name, 0)
+    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
+    for k in sorted(list(sample.keys())):
+      key_valid = k in self.data_writer.features
+      self.assertTrue(key_valid, '{} not valid'.format(k))
+    with tf.Session(config=copy.deepcopy(self.config)) as sess:
+      sample_ = sess.run(sample)
+      self.assertEqual(sample_.keys(), mysample.keys())
+      for k in sorted(list(sample_.keys())):
+        feat = self.data_reader.features[k]
+        equal_val = self.isEqualSampleVals(feat, sample_[k], mysample[k])
+        self.assertTrue(equal_val, '{} not equal'.format(k))
+
+  def test_multi_read(self):
+    name = 'test_multi_read'
+    num_total = 10
+    batch_size = 1
+    self.data_writer.create_dataset(name, num_total)
+    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
+    for k in sorted(list(sample.keys())):
+      key_valid = k in self.data_writer.features
+      self.assertTrue(key_valid, '{} not valid'.format(k))
+    with tf.Session(config=copy.deepcopy(self.config)) as sess:
+      for b in range(num_total):
+        sample_ = sess.run(sample)
+        mysample = self.generator.gen_sample(name, b)
+        self.assertEqual(sample_.keys(), mysample.keys())
+        for k in sorted(list(sample_.keys())):
+          feat = self.data_reader.features[k]
+          equal_val = self.isEqualSampleVals(feat, sample_[k], mysample[k])
+          self.assertTrue(equal_val, '{} not equal'.format(k))
+
+  def test_batch_read(self):
+    name = 'test_batch_read'
+    num_total = 10
+    batch_size = 5
+    num_batches = num_total // batch_size
+    self.data_writer.create_dataset(name, num_total)
+    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
+    feats = self.data_reader.features
+    for k in sorted(list(sample.keys())):
+      key_valid = k in self.data_writer.features
+      self.assertTrue(key_valid, '{} not valid'.format(k))
+    with tf.Session(config=copy.deepcopy(self.config)) as sess:
+      for b in range(num_batches):
+        sample_ = sess.run(sample)
+        for i in range(batch_size):
+          mysample = self.generator.gen_sample(name, b*batch_size + i)
+          for k in sorted(list(sample_.keys())):
+            feat = self.data_reader.features[k]
+            self.assertEqual(sample_.keys(), mysample.keys())
+            sample_sel = self.select(feat, sample_[k], i)
+            equal_val = self.isEqualSampleVals(feat, sample_sel, mysample[k])
+            self.assertTrue(equal_val, '{} not equal'.format(k))
+
+
+class DataTFRecordReaderAllFeaturesTest(DataTFRecordReaderBasicTest):
+  def setUp(self):
+    self.mySetUp(all_features_generator)
+
+
+if graph_nets_available:
+  class DataTFRecordReaderGraphTest(DataTFRecordReaderBasicTest):
+    def setUp(self):
+      # asdfasdfasdf
+      self.mySetUp(graph_generator)
+      self.equal_switcher[tfdataloader.GraphFeature] = \
+        lambda f, v0, v1: self.graphTupleValEqual(f, v0, v1)
+
+    def test_batch_read(self):
+      # TODO: Select does not work for GraphTuples so I do not know how to implement
+      pass 
+
+    def graphTupleValEqual(self, feat, val0, val1):
+      if isinstance(val0, graphs.GraphsTuple) and isinstance(val1, dict):
+        val0 = utils_np.graphs_tuple_to_data_dicts(val0)[0]
+      else:
+        val0 = utils_np.data_dicts_to_graphs_tuple([val0])
+        val0 = utils_np.graphs_tuple_to_data_dicts(val0)[0]
+      if isinstance(val1, graphs.GraphsTuple):
+        val1 = utils_np.graphs_tuple_to_data_dicts(val1)[0]
+      else:
+        val1 = utils_np.data_dicts_to_graphs_tuple([val1])
+        val1 = utils_np.graphs_tuple_to_data_dicts(val1)[0]
+      for k in val0.keys():
+        sub_feat = feat.features[k]
+        if val0[k] is None or val1[k] is None:
+          val0_none = val0[k] is None or val0[k].shape[0] == 0
+          val1_none = val1[k] is None or val1[k].shape[0] == 0
+          if val0_none != val1_none:
+            return False
+        elif not self.isEqualSampleVals(sub_feat, val0[k], val1[k]):
+          return False
+      return True
+
+
+############### NPZ Tests ###############
 class DataNpzWriterBasicTest(unittest.TestCase):
   def setUp(self):
     # Create a temporary directory for data saving before each test
@@ -308,151 +562,13 @@ if graph_nets_available:
                                                     verbose=False)
 
 
-class ReadTestCase(unittest.TestCase):
-  def sparseTensorValToTuple(self, sptensor):
-    indices = [
-      x.reshape(-1)
-      for x in np.split(sptensor.indices, sptensor.indices.shape[-1], axis=-1)
-    ]
-    values = sptensor.values
-    ttensor = (indices, values)
-    return ttensor
-
-  # Have to deal with sparse tensor types
-  def isEqualSampleVals(self, val0, val1):
-    # Convert SparseTensorValues to tuples
-    if isinstance(val0, tf.SparseTensorValue):
-      val0 = self.sparseTensorValToTuple(val0)
-    if isinstance(val1, tf.SparseTensorValue):
-      val1 = self.sparseTensorValToTuple(val1)
-    # Now treat equally
-    if type(val0) == tuple:
-      indices0, indices1 = val0[0], val1[0]
-      values0, values1 = val0[1], val1[1]
-      if len(indices0) != (len(indices1) + 1) and \
-          len(indices0) != len(indices1): # Batching
-        return False
-      if len(indices0) == (len(indices1) + 1):
-        indices0 = indices0[1:]
-      if len(indices0[0]) != len(indices1[0]):
-        return False
-      if values0.shape != values1.shape:
-        return False
-      for ind0, ind1 in zip(indices0, indices1):
-        if not np.array_equiv(ind0,ind1):
-          return False
-      return np.array_equiv(values0, values1)
-    else:
-      equal_val = np.array_equiv(np.squeeze(val0), np.squeeze(val1))
-    return equal_val
-
-
-class DataReaderBasicTest(ReadTestCase):
-  def setUp(self):
-    # Create a temporary directory for data saving before each test
-    self.test_dir = tempfile.mkdtemp()
-    self.config = tf.ConfigProto()
-    self.config.gpu_options.allow_growth = True
-    self.generator = basic_generator
-    self.data_writer = tfdataloader.DataWriter(self.test_dir,
-                                               self.generator,
-                                               verbose=False)
-    self.data_reader = tfdataloader.DataReader(self.test_dir)
- 
-  def tearDown(self):
-    # Remove the directory after each test
-    shutil.rmtree(self.test_dir)
-
-  def test_features(self):
-    for key, write_feat in self.data_writer.features.items():
-      read_feat = self.data_reader.features[key]
-      self.assertEqual(read_feat, write_feat)
-
-  def test_basic_read(self):
-    name = 'test_basic_read'
-    num_total = 1
-    batch_size = 1
-    self.data_writer.create_dataset(name, num_total)
-    mysample = self.generator.gen_sample(name, 0)
-    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
-    with tf.Session(config=copy.deepcopy(self.config)) as sess:
-      sample_ = sess.run(sample)
-      self.assertEqual(sample_.keys(), mysample.keys())
-      for k in sorted(list(sample_.keys())):
-        equal_val = self.isEqualSampleVals(sample_[k], mysample[k])
-        self.assertTrue(equal_val, '{} not equal'.format(k))
-
-  def test_multi_read(self):
-    name = 'test_multi_read'
-    num_total = 10
-    batch_size = 1
-    self.data_writer.create_dataset(name, num_total)
-    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
-    with tf.Session(config=copy.deepcopy(self.config)) as sess:
-      for b in range(num_total):
-        sample_ = sess.run(sample)
-        mysample = self.generator.gen_sample(name, b)
-        self.assertEqual(sample_.keys(), mysample.keys())
-        for k in sorted(list(sample_.keys())):
-          equal_val = self.isEqualSampleVals(sample_[k], mysample[k])
-          self.assertTrue(equal_val, '{} not equal'.format(k))
-
-
-class DataReaderAllFeaturesTest(DataReaderBasicTest):
-  def setUp(self):
-    # Create a temporary directory for data saving before each test
-    self.test_dir = tempfile.mkdtemp()
-    self.config = tf.ConfigProto()
-    self.config.gpu_options.allow_growth = True
-    self.generator = all_features_generator
-    self.data_writer = tfdataloader.DataWriter(self.test_dir,
-                                               self.generator,
-                                               verbose=False)
-    self.data_reader = tfdataloader.DataReader(self.test_dir)
- 
-
-if graph_nets_available:
-  class DataReaderGraphTest(DataReaderBasicTest):
-    def setUp(self):
-      # Create a temporary directory for data saving before each test
-      self.test_dir = tempfile.mkdtemp()
-      self.config = tf.ConfigProto()
-      self.config.gpu_options.allow_growth = True
-      self.generator = graph_generator
-      self.data_writer = tfdataloader.DataWriter(self.test_dir,
-                                                 self.generator,
-                                                 verbose=False)
-      self.data_reader = tfdataloader.DataReader(self.test_dir)
-
-    # Have to deal with sparse tensor types
-    def isEqualSampleVals(self, val0, val1):
-      if isinstance(val0, graphs.GraphsTuple) and isinstance(val1, dict):
-        val0 = utils_np.graphs_tuple_to_data_dicts(val0)[0]
-        val1 = utils_np.data_dicts_to_graphs_tuple([val1])
-        val1 = utils_np.graphs_tuple_to_data_dicts(val1)[0]
-      if type(val0) == type(val1) and isinstance(val0, dict):
-        ret_val = True
-        for k in val0.keys():
-          if not self.isEqualSampleVals(val0[k], val1[k]):
-            ret_val = False
-        return ret_val
-      else:
-        return super(DataReaderGraphTest, self).isEqualSampleVals(val0,val1)
-
-
 class DataNpzReaderBasicTest(ReadTestCase):
   def setUp(self):
-    # Create a temporary directory for data saving before each test
-    self.test_dir = tempfile.mkdtemp()
-    self.generator = basic_generator
+    self.mySetUp(basic_generator)
     self.data_writer = tfdataloader.DataNpzWriter(self.test_dir,
-                                                  self.generator,
-                                                  verbose=False)
+                                               self.generator,
+                                               verbose=False)
     self.data_reader = tfdataloader.DataNpzReader(self.test_dir)
-
-  def tearDown(self):
-    # Remove the directory after each test
-    shutil.rmtree(self.test_dir)
 
   def test_features(self):
     for key, write_feat in self.data_writer.features.items():
@@ -465,7 +581,8 @@ class DataNpzReaderBasicTest(ReadTestCase):
     mysample = self.generator.gen_sample(name, 0)
     sample = self.data_reader.load_npz_file(name, 0)
     for k in sorted(list(sample.keys())):
-      equal_val = self.isEqualSampleVals(sample[k], mysample[k])
+      feat = self.data_reader.features[k]
+      equal_val = self.isEqualSampleVals(feat, sample[k], mysample[k])
       self.assertTrue(equal_val, '{} not equal'.format(k))
 
   def test_multi_load_npz_read(self):
@@ -478,7 +595,8 @@ class DataNpzReaderBasicTest(ReadTestCase):
       mysample = self.generator.gen_sample(name, b)
       self.assertEqual(sample_.keys(), mysample.keys())
       for k in sorted(list(sample_.keys())):
-        equal_val = self.isEqualSampleVals(sample_[k], mysample[k])
+        feat = self.data_reader.features[k]
+        equal_val = self.isEqualSampleVals(feat, sample_[k], mysample[k])
         self.assertTrue(equal_val, '{} not equal'.format(k))
 
   # def test_multi_load_npz_read(self):
