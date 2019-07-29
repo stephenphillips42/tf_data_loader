@@ -114,6 +114,21 @@ class DataReader(object):
                    shuffle_data=True,
                    buffer_size=None,
                    repeat=None):
+    """Return iterator for this dataset from the tfrecords of mode `name`
+
+    This is the primary function used in training.
+
+    Args:
+      name: name of the mode we are in (e.g. 'train', 'test')
+      batch_size: size (>= 1) of the batch to load
+      shuffle_data: (boolean, Default= True) Whether to shuffle data or not
+      buffer_size: (size, Default= True) Whether to shuffle data or not
+      repeat: Number of times to repeat the dataset, `None` if looping forever.
+        Default= `None`
+
+    Returns:
+      iterator: an iterator from a tf.data.Dataset for this dataset
+    """
     # TODO: Add documentation
     if buffer_size == None:
       buffer_size = 5 * batch_size
