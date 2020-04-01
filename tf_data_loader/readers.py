@@ -108,73 +108,38 @@ class DataReader(object):
 
     return parser_op
 
-  def get_iterator(self,
-                   name,
-                   batch_size,
-                   shuffle_data=True,
-                   buffer_size=None,
-                   repeat=None):
-    """Return iterator for this dataset from the tfrecords of mode `name`
+  def get_tf_dataset(self, name):
+    """Return tf.data.Dataset object for this dataset from the tfrecords of mode `name`
 
-    This is the primary function used in training.
+    This is a primary function used in training, for efficient loading of data.
 
     Args:
-      name: name of the mode we are in (e.g. 'train', 'test')
-      batch_size: size (>= 1) of the batch to load
-      shuffle_data: (boolean, Default= True) Whether to shuffle data or not
-      buffer_size: (size, Default= True) Whether to shuffle data or not
-      repeat: Number of times to repeat the dataset, `None` if looping forever.
-        Default= `None`
+      name: name of the dataset we are in (e.g. 'data_train', 'data_test', etc.)
 
     Returns:
-      iterator: an iterator from a tf.data.Dataset for this dataset
+      dataset: a tf.data.Dataset object for this dataset
     """
-    # TODO: Add documentation
-    if buffer_size == None:
-      buffer_size = 5 * batch_size
-    # Gather data
     data_sources = glob.glob(
         os.path.join(self.data_dir, name, '*.tfrecords'))
-    if shuffle_data:
-      np.random.shuffle(data_sources)  # Added to help the shuffle
     # Build dataset provider
     dataset = tf.data.TFRecordDataset(data_sources)
     dataset = dataset.map(self.get_parser_op())
     dataset = dataset.repeat(repeat)
-    if shuffle_data:
-      dataset = dataset.shuffle(buffer_size=buffer_size)
-      # TODO: Add this?
-      # dataset = dataset.prefetch(buffer_size=batch_size)
 
-    iterator = dataset.make_one_shot_iterator()
-    return iterator
+    return dataset
 
-  def load_batch(self,
-                 name,
-                 batch_size,
-                 shuffle_data=True,
-                 buffer_size=None,
-                 repeat=None):
+  def make_batch_with_iterator(self, iterator, batch_size):
     """Return batch loaded from this dataset from the tfrecords of mode `name`
 
-    This is the primary function used in training.
+    This is a primary function used in training, for efficient loading of data.
 
     Args:
-      name: name of the mode we are in (e.g. 'train', 'test')
+      iterator: iterator made from tf.data.Dataset of this dataset
       batch_size: size (>= 1) of the batch to load
-      shuffle_data: (boolean, Default= True) Whether to shuffle data or not
-      buffer_size: (size, Default= True) Whether to shuffle data or not
-      repeat: Number of times to repeat the dataset, `None` if looping forever.
-        Default= `None`
 
     Returns:
       features: Dictionary of key strings to values of this sample
     """
-    iterator = self.get_iterator(name,
-                                 batch_size,
-                                 shuffle_data,
-                                 buffer_size,
-                                 repeat)
     batch = []
     batch.append(iterator.get_next())
     if batch_size > 1:
@@ -196,6 +161,43 @@ class DataReader(object):
     for key, value in self.features.items():
       sample[key] = value.stack([batch[b][key] for b in range(batch_size)])
     return sample
+
+  def get_standard_batch(self,
+                         name,
+                         batch_size,
+                         shuffle_data=True,
+                         buffer_size=None,
+                         repeat=None):
+    """Convenience function for loading batch from this dataset's tfrecords of mode `name`
+
+    Args:
+      name: name of the dataset we are in (e.g. 'data_train', 'data_test', etc.)
+      batch_size: size (>= 1) of the batch to load
+      shuffle_data: (boolean, Default=True) Whether to shuffle data or not
+      buffer_size: (size, Default=`5*batch_size`) Buffer size for loading
+      repeat: (size, Default=`None`) Number of times to repeat the
+              dataset, `None` if looping forever.
+
+    Returns:
+      features: Dictionary of key strings to values of this sample
+    """
+    if buffer_size == None:
+      buffer_size = 5 * batch_size
+    # Gather data
+    if shuffle_data:
+      np.random.shuffle(data_sources)  # Added to help the shuffle
+    data_sources = glob.glob(
+        os.path.join(self.data_dir, name, '*.tfrecords'))
+    # Build dataset provider
+    dataset = tf.data.TFRecordDataset(data_sources)
+    dataset = dataset.map(self.get_parser_op())
+    dataset = dataset.repeat(repeat)
+    if shuffle_data:
+      dataset = dataset.shuffle(buffer_size=buffer_size)
+
+    iterator = dataset.make_one_shot_iterator()
+    batch = self.make_batch_with_iterator(iterator, batch_size)
+    return batch
 
 
 class DataNpzReader(DataReader):

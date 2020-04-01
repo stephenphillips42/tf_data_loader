@@ -408,7 +408,7 @@ class DataTFRecordReaderBasicTest(ReadTestCase):
     batch_size = 1
     self.data_writer.create_dataset(name, num_total)
     mysample = self.generator.gen_sample(name, 0)
-    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
+    sample = self.data_reader.get_standard_batch(name, batch_size, shuffle_data=False)
     for k in sorted(list(sample.keys())):
       key_valid = k in self.data_writer.features
       self.assertTrue(key_valid, '{} not valid'.format(k))
@@ -425,7 +425,7 @@ class DataTFRecordReaderBasicTest(ReadTestCase):
     num_total = 10
     batch_size = 1
     self.data_writer.create_dataset(name, num_total)
-    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
+    sample = self.data_reader.get_standard_batch(name, batch_size, shuffle_data=False)
     for k in sorted(list(sample.keys())):
       key_valid = k in self.data_writer.features
       self.assertTrue(key_valid, '{} not valid'.format(k))
@@ -445,7 +445,7 @@ class DataTFRecordReaderBasicTest(ReadTestCase):
     batch_size = 5
     num_batches = num_total // batch_size
     self.data_writer.create_dataset(name, num_total)
-    sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
+    sample = self.data_reader.get_standard_batch(name, batch_size, shuffle_data=False)
     feats = self.data_reader.features
     for k in sorted(list(sample.keys())):
       key_valid = k in self.data_writer.features
@@ -604,7 +604,7 @@ class DataNpzReaderBasicTest(ReadTestCase):
   #   num_total = 10
   #   batch_size = 1
   #   self.data_writer.create_dataset(name, num_total)
-  #   sample = self.data_reader.load_batch(name, batch_size, shuffle_data=False)
+  #   sample = self.data_reader.get_standard_batch(name, batch_size, shuffle_data=False)
   #   with tf.Session(config=copy.deepcopy(self.config)) as sess:
   #     for b in range(num_total):
   #       sample_ = sess.run(sample)
